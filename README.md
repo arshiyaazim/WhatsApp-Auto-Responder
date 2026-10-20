@@ -20,7 +20,7 @@ A modern, privacy-first Android application that automatically replies to WhatsA
 ## ✨ Features
 
 - **🧠 Google Gemini AI Replies:** Unlike standard auto-responders that use rigid keyword matching or regex, this app analyzes conversational context and crafts human-like, helpful responses.
-- **🔑 In-App Gemini API Key Manager:** Tap the dashboard card to paste or enter your free Google Gemini API key with one-tap clipboard paste.
+- **🔑 Gemini API:** AI features require `GEMINI_API_KEY` to be configured in the build environment.
 - **🎭 Customizable Personality & Tones:** Choose how your auto-responder speaks or write your own custom prompt:
   - **Professional & Direct:** Polite, articulate, and business-ready.
   - **Friendly & Warm:** Enthusiastic, welcoming, and emoji-friendly.
@@ -28,8 +28,22 @@ A modern, privacy-first Android application that automatically replies to WhatsA
   - **Witty & Sarcastic:** Fun, clever, and playful banter.
   - **Custom System Prompt:** Fully configure your own AI persona and instructions.
 - **⚡ Native Notification Action Interception:** Uses Android's official `NotificationListenerService` and notification action replies (the same mechanism used by Wear OS smartwatches and Android Auto).
+- **🧩 Persistent AI Automation Rules:** Draft Bengali or English instructions into reviewed rules for a selected sender, then keep each rule enabled until you edit, disable, or delete it. Rules support an AI reply, a fixed reply, or a manual cross-chat send review.
 - **🎨 Modern Material 3 UI:** Clean, responsive user interface built 100% with Jetpack Compose.
-- **🛡️ 100% Local & Privacy-First:** No middleman backend, no tracking, and no external analytics.
+- **🛡️ Local-first:** No developer-owned message relay, tracking, or external analytics. AI features send the prompt and relevant message text directly to Google Gemini.
+
+---
+
+## 🧩 AI Automation Rules (Preview)
+
+Open **Automation Rules** from the WhatsApp settings area. Gemini interprets a Bengali or English instruction, but does not activate it directly: select the sender contact, review the interpreted action and contact mapping, then confirm. Enabled rules and their contact names/numbers are stored in the app's local preferences.
+
+- Sender matching currently requires an exact, case-insensitive match with the notification's displayed name. The saved sender phone number is not available to the notification listener for matching, so identical names and renamed contacts can be ambiguous.
+- Group notifications are skipped. While any rule is enabled, unmatched senders and group notifications do not fall back to the legacy general auto-reply.
+- AI and fixed replies require a usable WhatsApp notification inline-reply action.
+- An active AI-reply rule sends the matched incoming message and its instruction to Google's Gemini API; the generated reply is sent automatically through the notification action.
+- Cross-chat rules only post a prefilled WhatsApp review notification. The app never taps Send; the user must review and send the message manually. The recipient must have an international `+` phone number saved.
+- AI rule interpretation and AI replies require a build-time `GEMINI_API_KEY` environment variable. A key included in a distributed Android app can be extracted; use a restricted key and suitable quotas, or put Gemini behind a server you control for production distribution.
 
 ---
 
@@ -39,8 +53,8 @@ A modern, privacy-first Android application that automatically replies to WhatsA
 | :--- | :--- | :--- | :--- |
 | **Cost** | **100% Free forever** (BYOK Gemini API) | Paid subscription ($5–$15/mo) | Free, but requires 24/7 VPS hosting |
 | **WhatsApp Ban Risk** | **0% Risk** (Uses official Android notification API) | 0% Risk (Uses same notification API) | **High Risk** (Scrapers get banned by WhatsApp) |
-| **Privacy & Security** | **100% On-device Room DB**, No trackers | Closed-source, ads, unknown data harvesting | Depends on self-hosted script |
-| **Setup Difficulty** | Install APK & paste Gemini API key | Install app, pay paywall | Complex (Node/Python, Docker, headless Chrome) |
+| **Privacy & Security** | Local rules/history; direct Gemini API calls; no trackers | Closed-source, ads, unknown data harvesting | Depends on self-hosted script |
+| **Setup Difficulty** | Install a build with Gemini configured | Install app, pay paywall | Complex (Node/Python, Docker, headless Chrome) |
 | **Smartwatch Emulation** | Handled natively via `RemoteInput` | Supported | Unsupported |
 
 ---
@@ -52,13 +66,15 @@ Security and transparency are essential when dealing with messaging applications
 ### 1. Zero Middleman Servers
 This app does **NOT** route your messages through any third-party server or developer-owned backend. When an auto-reply is generated, your device communicates **directly and securely** with Google's official Gemini API endpoints (`generativelanguage.googleapis.com`) using your personal API key.
 
-### 2. Bring Your Own Key (BYOK)
-You supply your own free Google Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey). Your key is stored securely in encrypted local Android application storage and is never transmitted anywhere else.
+### 2. Gemini API Key
+Developers provide `GEMINI_API_KEY` as a build environment variable. It is embedded in the Android app and sent directly to Google's Gemini API over HTTPS when AI features are used. It is not encrypted in the APK; do not ship a personal key in a public build. Use a restricted key and quotas, or a server-side proxy for production distribution.
 
 ### 3. All Data Stored Locally
 All reply logs, conversation history, and custom tone definitions are stored strictly inside a local SQLite database (powered by Android Jetpack Room) on your physical device:
 - `personality_tones`
 - `whatsapp_messages`
+
+Automation rules and their contact names/numbers are stored separately in the app's local SharedPreferences. Incoming message text for AI replies is sent to Google Gemini as described above.
 
 Uninstalling or clearing app data wipes everything instantly.
 
@@ -124,10 +140,8 @@ Get-FileHash .\WhatsApp-Auto-Responder.apk -Algorithm SHA256
    * Return to Notification Access and toggle it **ON**.
 
 ### Step 3: Configure Your Free Gemini API Key
-1. Go to **[Google AI Studio](https://aistudio.google.com/app/apikey)** and click **Create API Key** (it is 100% free).
-2. Open the app and tap the yellow **🔑 Gemini API Key** card on the dashboard.
-3. Tap **📋 Paste from Clipboard** (or paste manually) $\rightarrow$ tap **Save**.
-4. Your key is stored securely in local device storage and AI auto-replies are instantly activated!
+1. For a developer-built APK, create a key in **[Google AI Studio](https://aistudio.google.com/app/apikey)** and set the `GEMINI_API_KEY` environment variable before building.
+2. AI features in an already-installed APK work only if its build includes a configured key. The app currently does not offer in-app key entry.
 
 ### Step 4: Choose Your Tone & Turn On!
 1. Select your preferred reply persona (e.g., *Professional*, *Friendly*, *Casual*, or create your own).
@@ -152,7 +166,9 @@ Modern Android OEM skins (MIUI/HyperOS, ColorOS, OxygenOS, OneUI) aggressively k
 **No.** Unofficial WhatsApp bots that reverse-engineer the WhatsApp web protocol or modify the WhatsApp APK risk account bans. In contrast, this app **does not modify WhatsApp or connect to WhatsApp servers**. It operates entirely via Android's official system notification action API (`RemoteInput`), functioning identically to how Android Auto or a Galaxy Watch sends a quick reply.
 
 ### Does it work with WhatsApp Business?
-**Yes.** As long as WhatsApp or WhatsApp Business posts standard Android notification alerts with reply actions, the listener service will detect and respond to them.
+**Yes.** In the Chatbot tab's settings, choose **Regular WhatsApp**, **WhatsApp Business**, or **Both**. Auto-replies use the inline reply action from the supported app's notification. Scheduled-message notifications use the selected app; with **Both**, Android opens an app chooser.
+
+This app cannot select a particular number/account inside one WhatsApp installation. Auto-replies act on the account that generated the notification, while scheduled messages open WhatsApp with the message text ready to send. Confirm account behavior on your device if you use multiple accounts.
 
 ### What if I don't want to reply to every message?
 You can pause the responder anytime from the main dashboard toggle or configure specific schedules.

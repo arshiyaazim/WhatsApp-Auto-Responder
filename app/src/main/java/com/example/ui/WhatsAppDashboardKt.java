@@ -1,8 +1,11 @@
 package com.example.ui;
 
+import android.app.AlertDialog;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.provider.Settings;
 import androidx.activity.compose.ActivityResultRegistryKt;
 import androidx.activity.compose.ManagedActivityResultLauncher;
@@ -145,6 +148,7 @@ import com.example.BuildConfig;
 import com.example.data.PersonalityTone;
 import com.example.data.ScheduledMessage;
 import com.example.data.WhatsAppMessage;
+import com.example.service.WhatsAppNotificationListener;
 import com.example.ui.theme.ColorKt;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -8559,6 +8563,7 @@ public final class WhatsAppDashboardKt {
                         return WhatsAppDashboardKt.ChatbotTab$lambda$243$lambda$226$lambda$225$lambda$224($viewModel, $useChatbotForReplies$delegate, $activeModel$delegate, $presetRoles, $systemInstruction$delegate, (AnimatedVisibilityScope) obj3, (Composer) obj4, ((Integer) obj5).intValue());
                     }
                 }, $composer, 54), $composer, (i14 & 14) | 1572864, 30);
+                WhatsAppTargetSettings($composer);
                 ComposerKt.sourceInformationMarkerEnd($composer);
                 ComposerKt.sourceInformationMarkerEnd($composer);
                 $composer.endNode();
@@ -8629,6 +8634,43 @@ public final class WhatsAppDashboardKt {
             }
         }
         return Unit.INSTANCE;
+    }
+
+    private static void WhatsAppTargetSettings(Composer composer) {
+        CompositionLocal localContext = AndroidCompositionLocals_androidKt.getLocalContext();
+        ComposerKt.sourceInformationMarkerStart(composer, 2023513938, "CC:CompositionLocal.kt#9igjgp");
+        Context context = (Context) composer.consume(localContext);
+        ComposerKt.sourceInformationMarkerEnd(composer);
+        SharedPreferences preferences = context.getSharedPreferences(WhatsAppNotificationListener.PREFS_NAME, 0);
+        Function0 onClick = new Function0() {
+            @Override
+            public Object invoke() {
+                String[] targets = {"Regular WhatsApp", "WhatsApp Business", "Both"};
+                new AlertDialog.Builder(context)
+                        .setTitle("Apps to monitor and use")
+                        .setSingleChoiceItems(targets, preferences.getInt(WhatsAppNotificationListener.KEY_WHATSAPP_TARGET, WhatsAppNotificationListener.TARGET_REGULAR), new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                preferences.edit().putInt(WhatsAppNotificationListener.KEY_WHATSAPP_TARGET, which).apply();
+                                dialog.dismiss();
+                            }
+                        })
+                        .setNegativeButton("Cancel", null)
+                        .show();
+                return Unit.INSTANCE;
+            }
+        };
+        Modifier modifier = ClickableKt.clickable-XHw0xAI$default((Modifier) Modifier.Companion, false, (String) null, (Role) null, onClick, 7, (Object) null);
+        TextKt.Text--4IGK_g("WhatsApp apps for auto-replies and scheduled messages (tap to choose)", modifier, MaterialTheme.INSTANCE.getColorScheme(composer, MaterialTheme.$stable).getOnSurfaceVariant-0d7_KjU(), 0L, (FontStyle) null, (FontWeight) null, (FontFamily) null, 0L, (TextDecoration) null, (TextAlign) null, 0L, 0, false, 0, 0, (Function1) null, MaterialTheme.INSTANCE.getTypography(composer, MaterialTheme.$stable).getBodyMedium(), composer, 6, 0, 65528);
+        Function0 openAutomationRules = new Function0() {
+            @Override
+            public Object invoke() {
+                context.startActivity(new Intent(context, AutomationRulesActivity.class));
+                return Unit.INSTANCE;
+            }
+        };
+        Modifier automationRulesModifier = ClickableKt.clickable-XHw0xAI$default((Modifier) Modifier.Companion, false, (String) null, (Role) null, openAutomationRules, 7, (Object) null);
+        TextKt.Text--4IGK_g("Open Automation Rules", automationRulesModifier, MaterialTheme.INSTANCE.getColorScheme(composer, MaterialTheme.$stable).getPrimary-0d7_KjU(), 0L, (FontStyle) null, (FontWeight) null, (FontFamily) null, 0L, (TextDecoration) null, (TextAlign) null, 0L, 0, false, 0, 0, (Function1) null, MaterialTheme.INSTANCE.getTypography(composer, MaterialTheme.$stable).getBodyMedium(), composer, 6, 0, 65528);
     }
 
     static final Unit ChatbotTab$lambda$243$lambda$226$lambda$225$lambda$201$lambda$200(MutableState $showSettings$delegate) {
