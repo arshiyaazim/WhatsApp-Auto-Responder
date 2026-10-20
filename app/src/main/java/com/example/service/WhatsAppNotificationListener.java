@@ -1,10 +1,15 @@
 package com.example.service;
 
 import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.RemoteInput;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
@@ -12,16 +17,22 @@ import android.util.Log;
 import androidx.core.app.NotificationCompat;
 import com.example.BuildConfig;
 import com.example.api.GeminiApi;
+import com.example.data.AutomationRule;
+import com.example.data.AutomationRuleStore;
 import com.example.data.PersonalityTone;
 import com.example.data.ScheduledMessage;
 import com.example.data.WhatsAppDatabase;
 import com.example.data.WhatsAppMessage;
 import com.example.data.WhatsAppRepository;
 import com.example.ui.WhatsAppViewModel;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import org.json.JSONException;
 import kotlin.Metadata;
 import kotlin.Pair;
 import kotlin.ResultKt;
@@ -53,11 +64,17 @@ public final class WhatsAppNotificationListener extends NotificationListenerServ
     public static final String KEY_ACTIVE_TONE_ID = "active_tone_id";
     public static final String KEY_AUTO_REPLY = "is_auto_reply_enabled";
     public static final String KEY_GROUP_REPLY = "is_group_reply_enabled";
+    public static final String KEY_WHATSAPP_TARGET = "whatsapp_target";
+    public static final int TARGET_REGULAR = 0;
+    public static final int TARGET_BUSINESS = 1;
+    public static final int TARGET_BOTH = 2;
     public static final String PREFS_NAME = "whatsapp_responder_prefs";
     private static final String TAG = "WhatsAppListener";
+    private static final String AUTOMATION_CHANNEL_ID = "automation_rule_handoff";
     private static String lastProcessedMessageId;
     private SharedPreferences prefs;
     private WhatsAppRepository repository;
+    private final ExecutorService automationExecutor = Executors.newSingleThreadExecutor();
     private final CompletableJob serviceJob = SupervisorKt.SupervisorJob$default((Job) null, 1, (Object) null);
     private final CoroutineScope serviceScope = CoroutineScopeKt.CoroutineScope(Dispatchers.getIO().plus(this.serviceJob));
     public static final int $stable = 8;
@@ -79,6 +96,7 @@ public final class WhatsAppNotificationListener extends NotificationListenerServ
     @Override // android.service.notification.NotificationListenerService, android.app.Service
     public void onDestroy() {
         super.onDestroy();
+        this.automationExecutor.shutdown();
         Job.DefaultImpls.cancel$default(this.serviceJob, (CancellationException) null, 1, (Object) null);
         Log.d(TAG, "Notification Listener Service Destroyed");
     }
@@ -92,7 +110,13 @@ public final class WhatsAppNotificationListener extends NotificationListenerServ
         Intrinsics.checkNotNullParameter(sbn, "sbn");
         super.onNotificationPosted(sbn);
         String packageName = sbn.getPackageName();
-        if (!Intrinsics.areEqual(packageName, "com.whatsapp") || (notification = sbn.getNotification()) == null || (extras = notification.extras) == null || (senderCharSeq = extras.getCharSequence("android.title")) == null) {
+        int target = this.prefs == null ? TARGET_REGULAR : this.prefs.getInt(KEY_WHATSAPP_TARGET, TARGET_REGULAR);
+        if (target < TARGET_REGULAR || target > TARGET_BOTH) {
+            target = TARGET_REGULAR;
+        }
+        boolean isRegularWhatsApp = Intrinsics.areEqual(packageName, "com.whatsapp") && target != TARGET_BUSINESS;
+        boolean isWhatsAppBusiness = Intrinsics.areEqual(packageName, "com.whatsapp.w4b") && target != TARGET_REGULAR;
+        if ((!isRegularWhatsApp && !isWhatsAppBusiness) || (notification = sbn.getNotification()) == null || (extras = notification.extras) == null || (senderCharSeq = extras.getCharSequence("android.title")) == null) {
             return;
         }
         String sender = senderCharSeq.toString();
@@ -127,13 +151,132 @@ public final class WhatsAppNotificationListener extends NotificationListenerServ
                         return;
                     }
                 }
-                String messageSignature = sbn.getId() + "_" + sbn.getPostTime() + "_" + messageText.hashCode();
+                String messageSignature = packageName + "_" + sbn.getId() + "_" + sbn.getPostTime() + "_" + messageText.hashCode();
                 if (Intrinsics.areEqual(lastProcessedMessageId, messageSignature)) {
                     return;
                 }
                 lastProcessedMessageId = messageSignature;
                 Log.d(TAG, "Intercepted WhatsApp notification: Sender='" + sender + "', Text='" + messageText + "', isGroup=" + isGroup);
+                if (handleAutomationRules(sender, messageText, sbn, isGroup, packageName)) {
+                    return;
+                }
                 BuildersKt.launch$default(this.serviceScope, (CoroutineContext) null, (CoroutineStart) null, new AnonymousClass1(sender, messageText, sbn, isGroup, null), 3, (Object) null);
+            }
+        }
+
+        private boolean handleAutomationRules(String sender, String messageText, StatusBarNotification sbn, boolean isGroup, String sourcePackage) {
+            List<AutomationRule> rules;
+            try {
+                rules = AutomationRuleStore.getRules(this);
+            } catch (JSONException exception) {
+                Log.e(TAG, "Saved automation rules are invalid; skipping this notification", exception);
+                return true;
+            }
+            boolean hasEnabledRules = false;
+            for (AutomationRule rule : rules) {
+                if (rule.isEnabled()) {
+                    hasEnabledRules = true;
+                    break;
+                }
+            }
+            if (!hasEnabledRules) {
+                return false;
+            }
+            if (!this.prefs.getBoolean(KEY_AUTO_REPLY, true)) {
+                Log.d(TAG, "Automation rules are paused by the global auto-reply toggle.");
+                return true;
+            }
+            if (isGroup) {
+                Log.d(TAG, "Automation rules do not run on group notifications because the sender cannot be reliably mapped.");
+                return true;
+            }
+            AutomationRule matchedRule = null;
+            for (AutomationRule rule : rules) {
+                if (rule.isEnabled() && rule.getSourceContactName().trim().equalsIgnoreCase(sender.trim())) {
+                    matchedRule = rule;
+                    break;
+                }
+            }
+            if (matchedRule == null) {
+                Log.d(TAG, "Enabled automation rules exist, but sender does not match; suppressing the general auto-reply.");
+                return true;
+            }
+            if (AutomationRule.ACTION_FIXED_REPLY.equals(matchedRule.getAction())) {
+                if (!replyToNotification(getApplicationContext(), sbn, matchedRule.getFixedReply())) {
+                    Log.e(TAG, "Could not send the confirmed fixed reply; notification has no usable reply action.");
+                }
+                return true;
+            }
+            if (AutomationRule.ACTION_FORWARD_REVIEW.equals(matchedRule.getAction())) {
+                showManualSendReview(sbn, matchedRule, messageText, sourcePackage);
+                return true;
+            }
+            if (AutomationRule.ACTION_AI_REPLY.equals(matchedRule.getAction())) {
+                AutomationRule rule = matchedRule;
+                this.automationExecutor.execute(() -> {
+                    try {
+                        SharedPreferences preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+                        String model = preferences.getString(WhatsAppViewModel.KEY_CHATBOT_MODEL, "gemini-3.1-flash-lite-preview");
+                        String generatedReply = GeminiApi.INSTANCE.generateAutomationReply(
+                                sender,
+                                messageText,
+                                rule.getReplyInstruction(),
+                                model);
+                        if (generatedReply.trim().isEmpty()) {
+                            Log.e(TAG, "Gemini returned an empty rule reply.");
+                            return;
+                        }
+                        if (!replyToNotification(getApplicationContext(), sbn, generatedReply)) {
+                            Log.e(TAG, "Could not send the confirmed AI reply; notification has no usable reply action.");
+                        }
+                    } catch (IOException | JSONException | IllegalArgumentException exception) {
+                        Log.e(TAG, "Could not generate the confirmed automation reply.", exception);
+                    }
+                });
+                return true;
+            }
+            Log.e(TAG, "Stored automation rule has an unsupported action: " + matchedRule.getAction());
+            return true;
+        }
+
+        private void showManualSendReview(StatusBarNotification sbn, AutomationRule rule, String messageText, String sourcePackage) {
+            String internationalNumber = rule.getRecipientPhone().replaceAll("[^0-9]", "");
+            if (!rule.getRecipientPhone().trim().startsWith("+") || internationalNumber.length() < 8 || internationalNumber.length() > 15) {
+                Log.e(TAG, "Manual send handoff requires a recipient number saved in international +countrycode format.");
+                return;
+            }
+            int target = this.prefs.getInt(KEY_WHATSAPP_TARGET, TARGET_REGULAR);
+            Intent openChat = new Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/" + internationalNumber + "?text=" + Uri.encode(messageText)));
+            if (target != TARGET_BOTH) {
+                String targetPackage = target == TARGET_BUSINESS ? "com.whatsapp.w4b" : "com.whatsapp";
+                openChat.setPackage(targetPackage);
+            }
+            openChat.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            int notificationId = (rule.getId() + "_" + sourcePackage + "_" + sbn.getId() + "_" + sbn.getPostTime()).hashCode();
+            PendingIntent pendingIntent = PendingIntent.getActivity(
+                    this,
+                    notificationId,
+                    openChat,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (Build.VERSION.SDK_INT >= 26) {
+                manager.createNotificationChannel(new NotificationChannel(
+                        AUTOMATION_CHANNEL_ID,
+                        "Automation send reviews",
+                        NotificationManager.IMPORTANCE_DEFAULT));
+            }
+            Notification notification = new NotificationCompat.Builder(this, AUTOMATION_CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.ic_dialog_info)
+                    .setContentTitle("Review message to " + rule.getRecipientName())
+                    .setContentText("Tap to review the prefilled message. WhatsApp will not send it until you tap Send.")
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(messageText))
+                    .setContentIntent(pendingIntent)
+                    .setAutoCancel(true)
+                    .build();
+            try {
+                manager.notify(notificationId, notification);
+            } catch (SecurityException exception) {
+                Log.e(TAG, "Could not post the manual-send review notification; check notification permission.", exception);
             }
         }
     }

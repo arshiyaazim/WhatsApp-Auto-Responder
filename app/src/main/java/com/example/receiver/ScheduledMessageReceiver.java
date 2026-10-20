@@ -8,7 +8,7 @@ import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.net.Uri;
+import android.content.SharedPreferences;
 import android.os.Build;
 import android.util.Log;
 import androidx.core.app.NotificationCompat;
@@ -16,7 +16,7 @@ import com.example.BuildConfig;
 import com.example.MainActivity;
 import com.example.data.WhatsAppDatabase;
 import com.example.data.WhatsAppRepository;
-import java.net.URLEncoder;
+import com.example.service.WhatsAppNotificationListener;
 import kotlin.Metadata;
 import kotlin.Unit;
 import kotlin.coroutines.Continuation;
@@ -1225,7 +1225,6 @@ public final class ScheduledMessageReceiver extends BroadcastReceiver {
 
     /* JADX INFO: Access modifiers changed from: private */
     public final void showScheduledNotification(Context context, int msgId, String recipient, String messageText) {
-        Intent whatsappIntent;
         Object systemService = context.getSystemService("notification");
         Intrinsics.checkNotNull(systemService, "null cannot be cast to non-null type android.app.NotificationManager");
         NotificationManager notificationManager = (NotificationManager) systemService;
@@ -1234,17 +1233,22 @@ public final class ScheduledMessageReceiver extends BroadcastReceiver {
             channel.setDescription("Alerts when a scheduled WhatsApp message is ready to be sent");
             notificationManager.createNotificationChannel(channel);
         }
-        try {
-            String url = "https://api.whatsapp.com/send?text=" + URLEncoder.encode(messageText, "UTF-8");
-            whatsappIntent = new Intent("android.intent.action.VIEW", Uri.parse(url));
-            whatsappIntent.setPackage("com.whatsapp");
-            whatsappIntent.setFlags(335544320);
-        } catch (Exception e) {
-            whatsappIntent = new Intent("android.intent.action.SEND");
-            whatsappIntent.setType("text/plain");
-            whatsappIntent.putExtra("android.intent.extra.TEXT", messageText);
-            whatsappIntent.setPackage("com.whatsapp");
-            whatsappIntent.setFlags(268435456);
+        SharedPreferences preferences = context.getSharedPreferences(WhatsAppNotificationListener.PREFS_NAME, 0);
+        int target = preferences.getInt(WhatsAppNotificationListener.KEY_WHATSAPP_TARGET, WhatsAppNotificationListener.TARGET_REGULAR);
+        if (target < WhatsAppNotificationListener.TARGET_REGULAR || target > WhatsAppNotificationListener.TARGET_BOTH) {
+            target = WhatsAppNotificationListener.TARGET_REGULAR;
+        }
+        Intent sendIntent = new Intent("android.intent.action.SEND");
+        sendIntent.setType("text/plain");
+        sendIntent.putExtra("android.intent.extra.TEXT", messageText);
+        sendIntent.setFlags(268435456);
+        Intent whatsappIntent;
+        if (target == WhatsAppNotificationListener.TARGET_BOTH) {
+            whatsappIntent = Intent.createChooser(sendIntent, "Choose WhatsApp app");
+        } else {
+            String packageName = target == WhatsAppNotificationListener.TARGET_BUSINESS ? "com.whatsapp.w4b" : "com.whatsapp";
+            sendIntent.setPackage(packageName);
+            whatsappIntent = sendIntent;
         }
         PendingIntent sendPendingIntent = PendingIntent.getActivity(context, msgId, whatsappIntent, 201326592);
         Intent appIntent = new Intent(context, (Class<?>) MainActivity.class);
